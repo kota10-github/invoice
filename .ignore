@@ -1,0 +1,10 @@
+# 検索用（rg等の対応ツール）。Git追跡/アクセス制限ではない。
+# 元資料・仕様・FB・根拠は一律除外しない。
+node_modules/
+.next/
+.venv/
+__pycache__/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
