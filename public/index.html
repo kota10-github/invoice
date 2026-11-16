@@ -51,6 +51,15 @@
     margin-bottom: 24px;
   }
 
+  /* VPSへの控えの状態（2026-11-16 データ消失の再発防止） */
+  .editor-panel .backup-status {
+    font-size: 11px;
+    color: #999;
+    margin: -16px 0 20px;
+    min-height: 1em;
+  }
+  .editor-panel .backup-status.ng { color: #c00; }
+
   .section-title {
     font-size: 13px;
     font-weight: 600;
@@ -1149,6 +1158,7 @@
   <div class="editor-panel">
     <h1>請求書作成ツール</h1>
     <p class="subtitle">Invoice Generator</p>
+    <p class="backup-status" id="backupStatus"></p>
 
     <div class="section-title">
       取引先
@@ -1491,21 +1501,47 @@
   let cloudStore = { profiles: {} };
   const PROFILE_KEY = 'inv_default_user';
 
-  async function cloudInit() {
-    try {
-      const res = await fetch(BLOB_BASE + '/' + CLOUD_BLOB_ID);
-      if (res.ok) cloudStore = await res.json();
-    } catch(e) { console.warn('Cloud init failed:', e); }
-  }
+  // jsonblob への保存は停止（2026-11-16）。保存先の blob は2026年7月以前に期限切れで
+  // 消えており、さらに読み込み時にブラウザ内のデータより優先して上書きする作りで危険だった。
+  // また誰でも読める場所に口座番号まで置く形だったため使わない。cloudStore は空のまま。
+  async function cloudInit() {}
+  async function cloudSync() {}
 
-  async function cloudSync() {
+  // ===== VPSへの控え（書き込み専用。2026-11-16 データ消失の再発防止） =====
+  // 正本はこのブラウザの localStorage。保存のたびに VPS へ控えを送る（読み出し口は無い）。
+  // 失敗しても編集・保存は止めない。状態は画面上部に小さく表示する。
+  const BACKUP_URL = 'https://133-117-73-120.sslip.io/invoice-backup';
+  let backupTimer = null;
+  function setBackupStatus(text, ng) {
+    const el = document.getElementById('backupStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('ng', !!ng);
+  }
+  function hhmm(d) { return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
+  async function sendBackupNow() {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return;
     try {
-      await fetch(BLOB_BASE + '/' + CLOUD_BLOB_ID, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cloudStore)
-      });
-    } catch(e) { console.warn('Cloud sync failed:', e); }
+      const res = await fetch(BACKUP_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw, keepalive: raw.length < 60000 });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      setBackupStatus('控え：VPSに保存済み（' + hhmm(new Date()) + '）');
+    } catch(e) {
+      console.warn('VPS backup failed:', e);
+      setBackupStatus('控え：VPSへ送れませんでした（このブラウザには保存済み・次の保存で再送）', true);
+    }
+  }
+  function scheduleBackup() {
+    if (backupTimer) clearTimeout(backupTimer);
+    backupTimer = setTimeout(sendBackupNow, 3000);
+  }
+  // ブラウザの空き容量不足などで自動削除されないよう「消さないで」と申請する
+  async function requestPersistentStorage() {
+    try {
+      if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) {
+        await navigator.storage.persist();
+      }
+    } catch(e) {}
   }
 
   async function cloudSave(section, key, data) {
@@ -1594,7 +1630,7 @@
     const prev = localStorage.getItem(PROFILE_KEY);
     if (prev && prev !== next) backupProfile(prev);
     localStorage.setItem(PROFILE_KEY, next);
-    await cloudSave('profiles', PROFILE_KEY, data);
+    if (prev !== next) scheduleBackup();
   }
 
   function getProfileFieldValues() {
@@ -2357,6 +2393,8 @@
     await cloudInit();
     await loadProfile();
     init();
+    requestPersistentStorage();
+    sendBackupNow();
   })();
 </script>
 
